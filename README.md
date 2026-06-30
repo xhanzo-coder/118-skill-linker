@@ -67,6 +67,21 @@ python3 118-skill-linker/scripts/skill_manager.py updates --central ~/GitHub/my-
 
 The workflow is cross-platform in concept, but Windows symlink creation can require Developer Mode or an administrator terminal. Directory junctions can be an alternative for directory-based skills. The skill should guide the user rather than silently elevating privileges.
 
+Windows link options:
+
+- `mklink /D link target`: directory symlink, closest to macOS/Linux symlinks.
+- `mklink /J link target`: directory junction, often easier for directory-based skills.
+- `.lnk` shortcuts: not recommended, because agents and scripts may not treat them as real directories.
+
+The script defaults to `--link-type auto`. On Windows, auto mode tries a symlink first and falls back to a junction for directories. You can also request junctions explicitly:
+
+```powershell
+python 118-skill-linker\scripts\skill_manager.py link --project . --source C:\Users\you\GitHub\my-skills\skills\write-blog --link-type junction
+python 118-skill-linker\scripts\skill_manager.py init --project . --agents claude,codex --link-type junction
+```
+
+An AI agent may detect and explain missing permissions, but it should not silently elevate privileges, bypass UAC, or enter administrator credentials.
+
 ## Installation
 
 For project-level use, link or copy this folder into a project's skill directory:
@@ -81,4 +96,3 @@ If Codex or Claude Code expects a different entry point, link that entry point t
 .codex/skills  -> .agents/skills
 .claude/skills -> .agents/skills
 ```
-

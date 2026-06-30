@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Iterable
 
 PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
 USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
+IS_WINDOWS = platform.system() == "Windows"
 
 
 def expand(path: str | Path) -> Path:
@@ -25,6 +27,7 @@ def classify(path: Path, include_entries: bool = False) -> dict:
         "path": str(path),
         "exists": path.exists(),
         "is_symlink": path.is_symlink(),
+        "is_junction": is_junction(path),
         "is_dir": path.is_dir(),
         "target": None,
         "broken": False,
@@ -43,6 +46,16 @@ def classify(path: Path, include_entries: bool = False) -> dict:
         if include_entries:
             item["entries"] = scan_skill_entries(path)
     return item
+
+
+def is_junction(path: Path) -> bool:
+    checker = getattr(path, "is_junction", None)
+    if checker is None:
+        return False
+    try:
+        return bool(checker())
+    except OSError:
+        return False
 
 
 def scan_skill_entries(directory: Path) -> list[dict]:
@@ -119,15 +132,64 @@ def ensure_project_hub(project: Path, execute: bool) -> None:
         hub.mkdir(parents=True, exist_ok=True)
 
 
-def create_symlink(link: Path, target: Path, execute: bool) -> None:
+def resolve_link_target(link: Path, target: Path) -> Path:
+    if target.is_absolute():
+        return target.resolve(strict=False)
+    return (link.parent / target).resolve(strict=False)
+
+
+def create_windows_junction(link: Path, target: Path) -> None:
+    target_abs = resolve_link_target(link, target)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target_abs)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise OSError(result.stderr.strip() or result.stdout.strip())
+
+
+def windows_link_help(link: Path, target: Path, error: OSError) -> str:
+    target_abs = resolve_link_target(link, target)
+    return (
+        f"Windows 创建软链接失败: {error}\n"
+        "可选处理方式：\n"
+        "1. 开启 Windows Developer Mode 后重试；\n"
+        "2. 用管理员权限运行终端后重试；\n"
+        "3. 对目录 skill 改用 junction，例如：\n"
+        f"   mklink /J \"{link}\" \"{target_abs}\"\n"
+        "不要让 Agent 静默提权或自动绕过 UAC；需要用户确认并完成系统权限步骤。"
+    )
+
+
+def create_symlink(link: Path, target: Path, execute: bool, link_type: str = "auto") -> None:
+    if link_type == "junction" and not IS_WINDOWS:
+        raise SystemExit("junction 仅适用于 Windows；macOS/Linux 请使用 auto 或 symlink")
     if link.exists() or link.is_symlink():
         current = classify(link)
         print(f"跳过已存在路径: {link} ({json.dumps(current, ensure_ascii=False)})")
         return
-    print(f"将创建软链接: {link} -> {target}")
+    planned_type = "junction" if IS_WINDOWS and link_type == "junction" else "软链接"
+    print(f"将创建{planned_type}: {link} -> {target}")
     if execute:
         link.parent.mkdir(parents=True, exist_ok=True)
-        os.symlink(target, link)
+        if IS_WINDOWS and link_type == "junction":
+            create_windows_junction(link, target)
+            return
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except OSError as exc:
+            if IS_WINDOWS and link_type == "auto":
+                try:
+                    create_windows_junction(link, target)
+                    print("Windows symlink 权限不足或不可用，已改用 junction。")
+                    return
+                except OSError as junction_exc:
+                    raise SystemExit(windows_link_help(link, target, junction_exc)) from junction_exc
+            if IS_WINDOWS:
+                raise SystemExit(windows_link_help(link, target, exc)) from exc
+            raise
 
 
 def skill_dirs_in_repo(repo: Path) -> list[str]:
@@ -149,9 +211,9 @@ def init(args: argparse.Namespace) -> int:
     hub = project / ".agents" / "skills"
     for agent in parse_agents(args.agents):
         if agent == "claude":
-            create_symlink(project / ".claude" / "skills", Path("..") / ".agents" / "skills", execute)
+            create_symlink(project / ".claude" / "skills", Path("..") / ".agents" / "skills", execute, args.link_type)
         elif agent == "codex":
-            create_symlink(project / ".codex" / "skills", Path("..") / ".agents" / "skills", execute)
+            create_symlink(project / ".codex" / "skills", Path("..") / ".agents" / "skills", execute, args.link_type)
         elif agent == "agents":
             ensure_project_hub(project, execute)
         else:
@@ -171,7 +233,7 @@ def link(args: argparse.Namespace) -> int:
     name = args.name or source.name
     target = project / ".agents" / "skills" / name
     ensure_project_hub(project, args.execute)
-    create_symlink(target, source, args.execute)
+    create_symlink(target, source, args.execute, args.link_type)
     if not args.execute:
         print("当前只是 dry-run；用户确认后再传入 --execute 执行")
     return 0
@@ -188,6 +250,7 @@ def link_many(args: argparse.Namespace) -> int:
             source=raw_source,
             name=None,
             execute=args.execute,
+            link_type=args.link_type,
         )
         try:
             link(child_args)
@@ -229,6 +292,7 @@ def migrate(args: argparse.Namespace) -> int:
     plan = {
         "move": {"from": str(source), "to": str(target)},
         "create_symlink": {"path": str(source), "target": str(target)},
+        "link_type": args.link_type,
         "will_delete_real_directory": False,
         "note": "执行时会把真实目录移动到中央目录，然后在原位置创建指向中央目录的软链接。",
     }
@@ -238,7 +302,7 @@ def migrate(args: argparse.Namespace) -> int:
         return 0
     central.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
-    os.symlink(target, source)
+    create_symlink(source, target, True, args.link_type)
     print(json.dumps({"migrated": plan}, ensure_ascii=False, indent=2))
     return 0
 
@@ -435,6 +499,7 @@ def main() -> int:
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project", default=".")
     init_parser.add_argument("--agents", default="claude,codex")
+    init_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     init_parser.add_argument("--execute", action="store_true")
     init_parser.set_defaults(func=init)
 
@@ -442,12 +507,14 @@ def main() -> int:
     link_parser.add_argument("--project", default=".")
     link_parser.add_argument("--source", required=True)
     link_parser.add_argument("--name")
+    link_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     link_parser.add_argument("--execute", action="store_true")
     link_parser.set_defaults(func=link)
 
     link_many_parser = sub.add_parser("link-many")
     link_many_parser.add_argument("--project", default=".")
     link_many_parser.add_argument("--sources", required=True)
+    link_many_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     link_many_parser.add_argument("--execute", action="store_true")
     link_many_parser.set_defaults(func=link_many)
 
@@ -488,6 +555,7 @@ def main() -> int:
     migrate_parser.add_argument("--source", required=True)
     migrate_parser.add_argument("--central", required=True)
     migrate_parser.add_argument("--name")
+    migrate_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     migrate_parser.add_argument("--execute", action="store_true")
     migrate_parser.set_defaults(func=migrate)
 

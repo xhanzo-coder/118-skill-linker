@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""检查并管理项目级 Agent skill 软链接。"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Iterable
+
+
+PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
+USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
+
+
+def expand(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def classify(path: Path, include_entries: bool = False) -> dict:
+    item = {
+        "path": str(path),
+        "exists": path.exists(),
+        "is_symlink": path.is_symlink(),
+        "is_dir": path.is_dir(),
+        "target": None,
+        "broken": False,
+        "has_skill_md": False,
+        "entries": [],
+    }
+    if path.is_symlink():
+        raw_target = os.readlink(path)
+        target = Path(raw_target)
+        if not target.is_absolute():
+            target = path.parent / target
+        item["target"] = str(target.resolve(strict=False))
+        item["broken"] = not target.exists()
+    if path.exists() and path.is_dir():
+        item["has_skill_md"] = (path / "SKILL.md").exists()
+        if include_entries:
+            item["entries"] = scan_skill_entries(path)
+    return item
+
+
+def scan_skill_entries(directory: Path) -> list[dict]:
+    entries: list[dict] = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda p: p.name)
+    except OSError as exc:
+        return [{"name": "<错误>", "error": str(exc)}]
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        entry = classify(child, include_entries=False)
+        entry["name"] = child.name
+        entries.append(entry)
+    return entries
+
+
+def candidate_central_dirs(home: Path) -> list[str]:
+    candidates: list[Path] = []
+    github = home / "GitHub"
+    if github.exists():
+        for repo in sorted(github.iterdir(), key=lambda p: p.name):
+            for suffix in ("skills", ".agents/skills"):
+                candidate = repo / suffix
+                if candidate.exists():
+                    candidates.append(candidate)
+    for raw in ("~/Skills", "~/.agents/skills"):
+        candidate = expand(raw)
+        if candidate.exists():
+            candidates.append(candidate)
+    seen: set[str] = set()
+    result: list[str] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            result.append(key)
+    return result
+
+
+def collect_duplicate_names(groups: Iterable[dict]) -> dict[str, list[str]]:
+    seen: dict[str, list[str]] = {}
+    for group in groups:
+        for entry in group.get("entries", []):
+            name = entry.get("name")
+            if name and not name.startswith("<"):
+                seen.setdefault(name, []).append(entry["path"])
+    return {name: paths for name, paths in seen.items() if len(paths) > 1}
+
+
+def inspect(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    home = expand(args.home)
+    project_dirs = [classify(project / rel, include_entries=True) for rel in PROJECT_SKILL_DIRS]
+    user_dirs = [classify(expand(rel.replace("~", str(home), 1)), include_entries=True) for rel in USER_SKILL_DIRS]
+    report = {
+        "project": str(project),
+        "project_skill_dirs": project_dirs,
+        "user_skill_dirs": user_dirs,
+        "central_candidates": candidate_central_dirs(home),
+        "duplicates": collect_duplicate_names(project_dirs + user_dirs),
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def ensure_project_hub(project: Path, execute: bool) -> None:
+    hub = project / ".agents" / "skills"
+    if hub.exists():
+        print(f"已存在: {hub}")
+        return
+    print(f"将创建目录: {hub}")
+    if execute:
+        hub.mkdir(parents=True, exist_ok=True)
+
+
+def create_symlink(link: Path, target: Path, execute: bool) -> None:
+    if link.exists() or link.is_symlink():
+        current = classify(link)
+        print(f"跳过已存在路径: {link} ({json.dumps(current, ensure_ascii=False)})")
+        return
+    print(f"将创建软链接: {link} -> {target}")
+    if execute:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, link)
+
+
+def skill_dirs_in_repo(repo: Path) -> list[str]:
+    candidates: list[Path] = []
+    if (repo / "SKILL.md").exists():
+        candidates.append(repo)
+    for base in (repo / "skills", repo / ".agents" / "skills"):
+        if base.exists() and base.is_dir():
+            for child in sorted(base.iterdir(), key=lambda p: p.name):
+                if child.is_dir() and (child / "SKILL.md").exists():
+                    candidates.append(child)
+    return [str(path.resolve(strict=False)) for path in candidates]
+
+
+def init(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    execute = args.execute
+    ensure_project_hub(project, execute)
+    hub = project / ".agents" / "skills"
+    for agent in parse_agents(args.agents):
+        if agent == "claude":
+            create_symlink(project / ".claude" / "skills", Path("..") / ".agents" / "skills", execute)
+        elif agent == "codex":
+            create_symlink(project / ".codex" / "skills", Path("..") / ".agents" / "skills", execute)
+        elif agent == "agents":
+            ensure_project_hub(project, execute)
+        else:
+            raise SystemExit(f"未知 Agent: {agent}")
+    if not execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行")
+    return 0
+
+
+def link(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    source = expand(args.source)
+    if not source.exists() or not source.is_dir():
+        raise SystemExit(f"源路径不存在或不是目录: {source}")
+    if not (source / "SKILL.md").exists():
+        raise SystemExit(f"源目录不包含 SKILL.md: {source}")
+    name = args.name or source.name
+    target = project / ".agents" / "skills" / name
+    ensure_project_hub(project, args.execute)
+    create_symlink(target, source, args.execute)
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行")
+    return 0
+
+
+def link_many(args: argparse.Namespace) -> int:
+    sources = [part.strip() for part in args.sources.split(",") if part.strip()]
+    if not sources:
+        raise SystemExit("没有提供可链接的 sources")
+    exit_code = 0
+    for raw_source in sources:
+        child_args = argparse.Namespace(
+            project=args.project,
+            source=raw_source,
+            name=None,
+            execute=args.execute,
+        )
+        try:
+            link(child_args)
+        except SystemExit as exc:
+            print(f"链接失败: {raw_source}: {exc}")
+            exit_code = 1
+    return exit_code
+
+
+def check(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    problems = []
+    for rel in PROJECT_SKILL_DIRS:
+        directory = project / rel
+        if not directory.exists() or not directory.is_dir():
+            continue
+        for entry in scan_skill_entries(directory):
+            if entry.get("broken"):
+                problems.append(entry)
+            elif entry.get("is_dir") and not entry.get("has_skill_md"):
+                problems.append(entry)
+    print(json.dumps({"project": str(project), "problems": problems}, ensure_ascii=False, indent=2))
+    return 1 if problems else 0
+
+
+def migrate(args: argparse.Namespace) -> int:
+    source = expand(args.source)
+    central = expand(args.central)
+    if source.is_symlink():
+        raise SystemExit(f"源路径已经是软链接，不需要迁移: {source}")
+    if not source.exists() or not source.is_dir():
+        raise SystemExit(f"源路径不存在或不是目录: {source}")
+    if not (source / "SKILL.md").exists():
+        raise SystemExit(f"源目录不包含 SKILL.md: {source}")
+    name = args.name or source.name
+    target = central / name
+    if target.exists() or target.is_symlink():
+        raise SystemExit(f"中央目录中已存在目标路径，默认不覆盖: {target}")
+    plan = {
+        "move": {"from": str(source), "to": str(target)},
+        "create_symlink": {"path": str(source), "target": str(target)},
+        "will_delete_real_directory": False,
+        "note": "执行时会把真实目录移动到中央目录，然后在原位置创建指向中央目录的软链接。",
+    }
+    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行迁移")
+        return 0
+    central.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(target))
+    os.symlink(target, source)
+    print(json.dumps({"migrated": plan}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_git(repo: Path, command: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *command],
+        cwd=repo,
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def git_output(repo: Path, command: list[str]) -> str | None:
+    result = run_git(repo, command)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def git_root(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    probe = path if path.is_dir() else path.parent
+    result = run_git(probe, ["rev-parse", "--show-toplevel"])
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve(strict=False)
+
+
+def git_status_dict(repo: Path) -> dict:
+    root = git_root(repo)
+    if root is None:
+        return {"path": str(repo), "is_git_repo": False}
+    branch = git_output(root, ["branch", "--show-current"])
+    upstream = git_output(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    status = git_output(root, ["status", "--short"]) or ""
+    behind = None
+    ahead = None
+    if upstream:
+        behind_raw = git_output(root, ["rev-list", "--count", f"HEAD..{upstream}"])
+        ahead_raw = git_output(root, ["rev-list", "--count", f"{upstream}..HEAD"])
+        behind = int(behind_raw) if behind_raw and behind_raw.isdigit() else None
+        ahead = int(ahead_raw) if ahead_raw and ahead_raw.isdigit() else None
+    return {
+        "path": str(root),
+        "is_git_repo": True,
+        "branch": branch,
+        "upstream": upstream,
+        "dirty": bool(status),
+        "status": status.splitlines(),
+        "behind": behind,
+        "ahead": ahead,
+    }
+
+
+def find_git_repos(path: Path) -> list[Path]:
+    root = git_root(path)
+    if root is not None:
+        return [root]
+    repos: list[Path] = []
+    if not path.exists() or not path.is_dir():
+        return repos
+    for child in sorted(path.iterdir(), key=lambda p: p.name):
+        if child.name.startswith(".") or not child.is_dir():
+            continue
+        child_root = git_root(child)
+        if child_root is not None:
+            repos.append(child_root)
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for repo in repos:
+        key = str(repo)
+        if key not in seen:
+            seen.add(key)
+            unique.append(repo)
+    return unique
+
+
+def git_status(args: argparse.Namespace) -> int:
+    repo = expand(args.repo)
+    print(json.dumps(git_status_dict(repo), ensure_ascii=False, indent=2))
+    return 0
+
+
+def updates(args: argparse.Namespace) -> int:
+    central = expand(args.central)
+    repos = find_git_repos(central)
+    if args.execute:
+        for repo in repos:
+            print(f"获取远端更新信息: {repo}")
+            result = run_git(repo, ["fetch", "--prune"])
+            if result.returncode != 0:
+                print(json.dumps({"path": str(repo), "fetch_error": result.stderr.strip()}, ensure_ascii=False))
+    else:
+        print("当前只是本地检查；远端是否有新提交可能不是最新。用户确认后传入 --execute 才会运行 git fetch --prune")
+    report = [git_status_dict(repo) for repo in repos]
+    print(json.dumps({"central": str(central), "repositories": report}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def update_repo(args: argparse.Namespace) -> int:
+    repo = expand(args.repo)
+    status = git_status_dict(repo)
+    if not status.get("is_git_repo"):
+        raise SystemExit(f"不是 git 仓库: {repo}")
+    print(json.dumps({"planned_update": status}, ensure_ascii=False, indent=2))
+    if status.get("dirty") and not args.allow_dirty:
+        raise SystemExit("仓库有本地改动；默认不更新。确认要继续时传入 --allow-dirty")
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行 git fetch --prune 和 git pull --ff-only")
+        return 0
+    root = Path(status["path"])
+    fetch = run_git(root, ["fetch", "--prune"])
+    if fetch.returncode != 0:
+        raise SystemExit(fetch.stderr.strip())
+    pull = run_git(root, ["pull", "--ff-only"])
+    if pull.returncode != 0:
+        raise SystemExit(pull.stderr.strip())
+    print(pull.stdout.strip())
+    print(json.dumps({"updated": git_status_dict(root)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def checkout(args: argparse.Namespace) -> int:
+    repo = expand(args.repo)
+    status = git_status_dict(repo)
+    if not status.get("is_git_repo"):
+        raise SystemExit(f"不是 git 仓库: {repo}")
+    plan = {"repo": status, "checkout_ref": args.ref}
+    print(json.dumps({"planned_checkout": plan}, ensure_ascii=False, indent=2))
+    if status.get("dirty") and not args.allow_dirty:
+        raise SystemExit("仓库有本地改动；默认不切换版本。确认要继续时传入 --allow-dirty")
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行 git checkout")
+        return 0
+    root = Path(status["path"])
+    result = run_git(root, ["checkout", args.ref])
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip())
+    print(result.stdout.strip())
+    print(json.dumps({"checked_out": git_status_dict(root)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def clone(args: argparse.Namespace) -> int:
+    dest_parent = expand(args.dest_parent)
+    repo_name = args.name or Path(args.repo_url.rstrip("/").removesuffix(".git")).name
+    dest = dest_parent / repo_name
+    plan = {
+        "repo_url": args.repo_url,
+        "destination": str(dest),
+        "after_clone_detection": [
+            "检查仓库根目录是否包含 SKILL.md",
+            "检查 skills/*/SKILL.md",
+            "检查 .agents/skills/*/SKILL.md",
+        ],
+    }
+    print(json.dumps({"planned_clone": plan}, ensure_ascii=False, indent=2))
+    if dest.exists():
+        raise SystemExit(f"目标路径已存在，默认不覆盖: {dest}")
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 执行 git clone")
+        return 0
+    dest_parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "clone", args.repo_url, str(dest)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip())
+    print(result.stdout.strip())
+    print(json.dumps({"cloned": str(dest), "skill_dirs": skill_dirs_in_repo(dest)}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def parse_agents(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="安全管理 Agent skill 软链接。")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    inspect_parser = sub.add_parser("inspect")
+    inspect_parser.add_argument("--project", default=".")
+    inspect_parser.add_argument("--home", default="~")
+    inspect_parser.set_defaults(func=inspect)
+
+    init_parser = sub.add_parser("init")
+    init_parser.add_argument("--project", default=".")
+    init_parser.add_argument("--agents", default="claude,codex")
+    init_parser.add_argument("--execute", action="store_true")
+    init_parser.set_defaults(func=init)
+
+    link_parser = sub.add_parser("link")
+    link_parser.add_argument("--project", default=".")
+    link_parser.add_argument("--source", required=True)
+    link_parser.add_argument("--name")
+    link_parser.add_argument("--execute", action="store_true")
+    link_parser.set_defaults(func=link)
+
+    link_many_parser = sub.add_parser("link-many")
+    link_many_parser.add_argument("--project", default=".")
+    link_many_parser.add_argument("--sources", required=True)
+    link_many_parser.add_argument("--execute", action="store_true")
+    link_many_parser.set_defaults(func=link_many)
+
+    check_parser = sub.add_parser("check")
+    check_parser.add_argument("--project", default=".")
+    check_parser.set_defaults(func=check)
+
+    git_status_parser = sub.add_parser("git-status")
+    git_status_parser.add_argument("--repo", required=True)
+    git_status_parser.set_defaults(func=git_status)
+
+    updates_parser = sub.add_parser("updates")
+    updates_parser.add_argument("--central", required=True)
+    updates_parser.add_argument("--execute", action="store_true")
+    updates_parser.set_defaults(func=updates)
+
+    update_parser = sub.add_parser("update")
+    update_parser.add_argument("--repo", required=True)
+    update_parser.add_argument("--allow-dirty", action="store_true")
+    update_parser.add_argument("--execute", action="store_true")
+    update_parser.set_defaults(func=update_repo)
+
+    checkout_parser = sub.add_parser("checkout")
+    checkout_parser.add_argument("--repo", required=True)
+    checkout_parser.add_argument("--ref", required=True)
+    checkout_parser.add_argument("--allow-dirty", action="store_true")
+    checkout_parser.add_argument("--execute", action="store_true")
+    checkout_parser.set_defaults(func=checkout)
+
+    clone_parser = sub.add_parser("clone")
+    clone_parser.add_argument("--repo-url", required=True)
+    clone_parser.add_argument("--dest-parent", required=True)
+    clone_parser.add_argument("--name")
+    clone_parser.add_argument("--execute", action="store_true")
+    clone_parser.set_defaults(func=clone)
+
+    migrate_parser = sub.add_parser("migrate")
+    migrate_parser.add_argument("--source", required=True)
+    migrate_parser.add_argument("--central", required=True)
+    migrate_parser.add_argument("--name")
+    migrate_parser.add_argument("--execute", action="store_true")
+    migrate_parser.set_defaults(func=migrate)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

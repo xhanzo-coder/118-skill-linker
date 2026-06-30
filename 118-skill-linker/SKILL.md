@@ -1,0 +1,225 @@
+---
+name: 118-skill-linker
+description: 使用中央 skills 目录和项目级软链接管理 Agent skills。当用户需要检查、初始化、下载/克隆、链接、批量链接、取消链接、同步、迁移、更新、切换版本、去重或排查 Codex、Claude Code、.agents、.codex、.claude、用户级 skills 目录或项目级 skills 目录时使用。也适用于处理失效软链接、中央 skills 仓库、多 Agent 共享 skills、检查下载的 skills 是否有更新、通过 git 更新 skills、判断是否应该 fork 别人的 skill，以及把复制出来的 skills 安全迁移为软链接。
+---
+
+# 118 Skill Linker
+
+## 概览
+
+使用这个 skill，把中央来源中的 Agent skills 链接到项目级 skills 目录中。默认只做只读检查；在任何写入、同步、替换、删除或 git 更新前，先解释计划并获得用户确认。
+
+## 安全规则
+
+- 除非用户明确要求某个安全的写入操作，否则先从只读检查开始。
+- 在把某个目录视为中央 skills 目录前，必须先让用户确认。
+- 在同步或迁移前，列出所有计划创建、替换、跳过、备份、删除或 git 操作，并等待用户确认。
+- 不要用软链接覆盖已有的真实目录。
+- 不要删除真实 skill 目录，除非用户明确要求删除那个具体目录。
+- 移除项目 skill 时，先确认目标是软链接，再只删除软链接本身。
+- 通过软链接编辑文件前要提醒用户：这会修改中央原件，并影响所有指向它的项目。
+- 对共享或团队项目，要提醒用户：`/Users/name/...` 这类绝对软链接在别人电脑上可能变成失效链接。
+
+## 工作流程
+
+1. 判断用户请求属于检查、初始化、下载/克隆、链接、批量链接、取消链接、同步、迁移、更新、切换版本、fork 建议或解释。
+2. 在状态未知时先执行检查。
+3. 识别项目级目录：
+   - `.agents/skills`
+   - `.codex/skills`
+   - `.claude/skills`
+4. 识别用户级目录：
+   - `~/.agents/skills`
+   - `~/.codex/skills`
+   - `~/.claude/skills`
+5. 识别中央目录候选：
+   - 用户提供的路径
+   - `~/GitHub/*/skills`
+   - `~/GitHub/*/.agents/skills`
+   - `~/Skills`
+   - `~/.agents/skills`
+6. 汇报当前目录结构、重复 skill 名、软链接、失效软链接、复制出来的 skills，以及可能的中央仓库。
+7. 给出建议方案，并要求用户确认中央目录和任何写入操作。
+8. 只执行已经确认的操作。
+9. 使用 `ls -l`、`readlink` 或 `scripts/skill_manager.py inspect` 验证结果。
+
+## 首次触发流程
+
+用户第一次要求“管理 skills”“统一 skills”“同步 Codex 和 Claude 的 skills”或类似任务时，按以下顺序处理：
+
+1. 先运行只读检查，不创建目录、不创建软链接、不删除文件。
+2. 同时扫描用户级目录和当前项目目录：
+   - 用户级：`~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills`
+   - 项目级：`.agents/skills`、`.codex/skills`、`.claude/skills`
+3. 汇总发现：
+   - 哪些目录存在
+   - 哪些目录不存在
+   - 哪些条目是真实目录
+   - 哪些条目是软链接
+   - 哪些软链接已经失效
+   - 哪些 skill 名在多个位置重复
+   - 哪些路径可能是中央 skills 目录
+4. 向用户说明候选中央目录，并请用户确认要使用哪一个。
+5. 在用户确认中央目录前，不要执行迁移、同步、替换或 git 更新。
+
+如果没有发现明显的中央目录，询问用户希望把中央 skills 目录放在哪里；不要自行创建中央目录，除非用户明确同意。
+
+## 同步前确认
+
+同步、迁移、替换、备份、删除软链接、创建软链接、克隆仓库、运行 `git fetch` 或运行 git 更新前，必须先给用户一份计划。计划至少包含：
+
+- 将创建哪些目录
+- 将创建哪些软链接，以及每个软链接指向哪里
+- 将跳过哪些已有目录或冲突项
+- 是否会备份任何内容
+- 是否会删除软链接
+- 是否会克隆仓库，以及克隆到哪里
+- 是否会运行 `git fetch`、`git pull` 或 `git checkout`
+- 明确说明不会删除真实 skill 目录，除非用户明确要求
+
+用户确认后再执行。执行完成后，再运行检查命令验证结果。
+
+## 脚本
+
+使用 `scripts/skill_manager.py` 进行确定性的检查和安全的软链接操作。除非传入 `--execute`，默认命令都是只读或 dry-run。
+
+检查当前状态：
+
+```bash
+python3 scripts/skill_manager.py inspect --project .
+```
+
+以 dry-run 方式初始化项目入口目录：
+
+```bash
+python3 scripts/skill_manager.py init --project . --agents claude,codex
+```
+
+用户确认后执行：
+
+```bash
+python3 scripts/skill_manager.py init --project . --agents claude,codex --execute
+```
+
+以 dry-run 方式链接单个 skill：
+
+```bash
+python3 scripts/skill_manager.py link --project . --source ~/GitHub/my-skills/skills/write-blog
+```
+
+用户确认后执行：
+
+```bash
+python3 scripts/skill_manager.py link --project . --source ~/GitHub/my-skills/skills/write-blog --execute
+```
+
+只检查链接：
+
+```bash
+python3 scripts/skill_manager.py check --project .
+```
+
+检查单个下载仓库的 git 状态：
+
+```bash
+python3 scripts/skill_manager.py git-status --repo ~/GitHub/my-skills
+```
+
+检查中央目录下哪些下载的 skill 仓库可能落后远端。默认只使用本地已有的远端跟踪信息，不联网：
+
+```bash
+python3 scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills
+```
+
+用户确认后，获取最新远端信息再判断哪些仓库有更新：
+
+```bash
+python3 scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills --execute
+```
+
+用户确认后，更新某个下载仓库：
+
+```bash
+python3 scripts/skill_manager.py update --repo ~/GitHub/my-skills --execute
+```
+
+以 dry-run 方式克隆 skill 仓库到中央仓库父目录：
+
+```bash
+python3 scripts/skill_manager.py clone --repo-url https://github.com/user/some-skills.git --dest-parent ~/GitHub
+```
+
+用户确认后执行克隆，并在克隆后识别仓库中包含哪些 skills：
+
+```bash
+python3 scripts/skill_manager.py clone --repo-url https://github.com/user/some-skills.git --dest-parent ~/GitHub --execute
+```
+
+以 dry-run 方式切换某个下载仓库到指定版本：
+
+```bash
+python3 scripts/skill_manager.py checkout --repo ~/GitHub/my-skills --ref v1.2.0
+```
+
+以 dry-run 方式把多个 skills 链接到当前项目：
+
+```bash
+python3 scripts/skill_manager.py link-many --project . --sources ~/GitHub/my-skills/skills/a,~/GitHub/my-skills/skills/b
+```
+
+以 dry-run 方式把已有真实 skill 目录迁移到中央目录，并在原位置创建软链接：
+
+```bash
+python3 scripts/skill_manager.py migrate --source ~/.claude/skills/write-blog --central ~/GitHub/my-skills/skills
+```
+
+## 操作指引
+
+首次使用时，先运行 `inspect`，总结发现的问题，然后询问用户哪个目录应作为中央 skills 目录。不要仅凭某个路径存在就把它推断为中央目录。
+
+链接 skill 时，要求源目录有效且包含 `SKILL.md`。如果目标名称已经存在：
+- 如果它已经是同一个软链接，报告无需修改。
+- 如果它是失效软链接，询问是否替换。
+- 如果它是真实目录或文件，不要覆盖；建议备份、手动迁移或跳过。
+
+批量链接多个 skills 时，先逐个验证源目录都包含 `SKILL.md`，再列出计划创建的所有软链接。只在用户确认后执行 `link-many --execute`。
+
+当用户要求下载、克隆或安装一个仓库时，先判断它是否可能是 skills 仓库。判断依据包括：仓库名或路径包含 `skill`/`skills`，用户描述中提到 agent skills，或克隆/下载后能发现 `SKILL.md`、`skills/*/SKILL.md`、`.agents/skills/*/SKILL.md`。如果判断为 skills 仓库，询问用户是否要克隆到中央 skills 仓库父目录，例如 `~/GitHub`。不要默认克隆到当前项目里。
+
+克隆完成后，识别仓库内的 skill 位置：
+- 仓库根目录存在 `SKILL.md`：整个仓库可能就是一个 skill。
+- 仓库内存在 `skills/<name>/SKILL.md`：这些子目录是可链接 skills。
+- 仓库内存在 `.agents/skills/<name>/SKILL.md`：这些子目录是可链接 skills。
+
+迁移已有真实目录时，适用于“全局目录或项目目录里已经复制了一份 skill，现在想改成中央目录 + 软链接”的场景。迁移计划必须说明：真实目录会被移动到中央目录，原位置会变成软链接；不会删除真实 skill 内容。目标中央路径已存在时，默认停止并让用户选择。
+
+同步多个 Agent 时，优先使用 `.agents/skills` 作为项目级中心目录，并且只在用户确认后把 `.claude/skills` 和 `.codex/skills` 链接到它。如果其中任一目录已经是真实目录，报告冲突并让用户选择处理方式。
+
+更新时，把 git 作为版本管理来源。先用 `git-status` 或 `updates` 报告仓库路径、当前分支、上游分支、本地改动、ahead/behind 状态。默认不要联网检查；如果需要知道远端是否有新提交，先说明会运行 `git fetch --prune`，获得用户确认后再执行。运行 `git pull` 前，报告仓库路径以及是否有本地改动；有本地改动时默认不要更新。如果用户想固定到某个版本，只在确认目标 ref 后使用 `git checkout`。
+
+如果用户问“哪个下载的 skill 更新了”，先确认中央 skills 目录，然后运行 `updates --central <目录>`。如果结果可能过期，说明它只是本地远端跟踪信息；询问用户是否允许获取远端信息，确认后再运行 `updates --central <目录> --execute`。只在用户明确确认后，才对具体仓库运行 `update --repo <仓库> --execute`。
+
+如果用户需要固定某个版本，先运行 `git-status` 查看本地改动和当前分支，再说明将执行 `git checkout <ref>`。有本地改动时默认不要切换；用户确认风险后才能使用 `--allow-dirty`。
+
+## Fork 决策
+
+fork 的意思是：把别人的 GitHub 仓库复制成你自己账号下的一份仓库。适用于你需要长期修改别人的 skill，同时还希望以后能从原作者那里同步更新。
+
+触发 fork 建议的典型情况：
+
+- 用户说“我经常要改这个别人的 skill”。
+- git 状态显示中央仓库有本地改动，同时用户又想更新远端。
+- 用户担心自己的修改被 `git pull` 覆盖、冲突或难以维护。
+- 用户想把本地修复提交到自己的 GitHub。
+
+处理流程：
+
+1. 先确认当前仓库是不是用户自己的仓库；如果不确定，查看 `git remote -v` 并向用户说明。
+2. 如果这是别人的仓库且用户要长期改，建议用户 fork 一份到自己的 GitHub。
+3. fork 后，把本地仓库的 `origin` 指向用户自己的 fork，把原作者仓库作为 `upstream`。
+4. 后续本地修改提交到 `origin`；需要同步原作者更新时，从 `upstream` 拉取。
+5. 不要自动执行 fork、改 remote 或推送，除非用户明确确认。
+
+对团队仓库，尽量使用相对软链接；如果不合适，就提供安装脚本或说明，避免提交绝对软链接。
+
+不要为定时任务添加自动化逻辑；如果用户要求定时更新，先解释该 skill 当前不内置定时任务，再建议手动运行更新检查命令。

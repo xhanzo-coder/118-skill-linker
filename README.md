@@ -1,32 +1,32 @@
 # 118 Skill Linker
 
-`118-skill-linker` is a Codex skill for managing Agent skills with a central skills directory and project-level symlinks.
+`118-skill-linker` 是一个用于管理 Agent skills 的 Codex skill。它的核心思路是：**把 skills 原件集中放在一个中央目录里，每个项目只通过软链接引用自己需要的 skills**。
 
-It is designed for users who work with multiple agents, such as Codex and Claude Code, and want one clean way to inspect, clone, link, migrate, update, and version skills without scattering duplicate copies across projects.
+它适合同时使用 Codex、Claude Code 或其他 Agent 的用户，帮助你检查、克隆、链接、迁移、更新和固定 skills 版本，避免每个项目里散落多份重复 skill。
 
-## What It Does
+## 它能做什么
 
-- Inspect user-level and project-level skill directories.
-- Detect real directories, symlinks, broken symlinks, duplicate skill names, and likely central skill repositories.
-- Initialize project-level skill entry points such as `.agents/skills`, `.codex/skills`, and `.claude/skills`.
-- Link one or more skills from a central directory into the current project.
-- Clone likely skills repositories into a central parent directory after user confirmation.
-- Migrate copied skill directories into a central directory and replace the original location with a symlink.
-- Check git status, detect update candidates, update downloaded skill repositories, and checkout fixed versions.
-- Provide guidance for when to fork someone else's skill repository.
+- 检查用户级和项目级 skills 目录。
+- 识别真实目录、软链接、失效软链接、重复 skill 名称，以及可能的中央 skills 仓库。
+- 初始化项目级入口，例如 `.agents/skills`、`.codex/skills`、`.claude/skills`。
+- 把中央目录里的一个或多个 skills 链接到当前项目。
+- 在用户确认后，把可能的 skills 仓库克隆到中央目录父级。
+- 把已经复制到全局或项目里的 skill 迁移到中央目录，并在原位置创建软链接。
+- 检查 git 状态、发现可更新的下载仓库、更新 skill 仓库、切换到指定版本。
+- 在你长期修改别人 skill 时，提示是否应该 fork 一份自己的仓库。
 
-## Safety Model
+## 安全原则
 
-The skill is intentionally conservative.
+这个 skill 默认很保守。
 
-- It starts with read-only inspection when state is unknown.
-- It asks the user to confirm the central skills directory before treating it as authoritative.
-- It uses dry-run behavior by default for write operations.
-- It does not overwrite real directories with symlinks.
-- It does not delete real skill directories unless the user explicitly asks for that exact deletion.
-- It explains sync, migration, clone, git update, and checkout plans before execution.
+- 状态不明确时，先只读检查。
+- 在把某个路径当作中央 skills 目录前，会先让用户确认。
+- 写入类操作默认 dry-run。
+- 不会用软链接覆盖已有真实目录。
+- 不会删除真实 skill 目录，除非用户明确要求删除那个具体目录。
+- 同步、迁移、克隆、git 更新和版本切换前，会先说明计划。
 
-## Layout
+## 目录结构
 
 ```text
 118-skill-linker/
@@ -37,62 +37,69 @@ The skill is intentionally conservative.
     └── skill_manager.py
 ```
 
-## Example Commands
+## 常用命令
 
-Inspect the current project:
+检查当前项目：
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py inspect --project .
 ```
 
-Initialize project skill entry points as a dry run:
+以 dry-run 方式初始化项目 skills 入口：
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py init --project . --agents claude,codex
 ```
 
-Link a skill as a dry run:
+以 dry-run 方式链接一个 skill：
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py link --project . --source ~/GitHub/my-skills/skills/write-blog
 ```
 
-Check downloaded skill repositories for update candidates:
+检查下载的 skill 仓库是否可能有更新：
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills
 ```
 
-## Windows Notes
+用户确认后更新某个仓库：
 
-The workflow is cross-platform in concept, but Windows symlink creation can require Developer Mode or an administrator terminal. Directory junctions can be an alternative for directory-based skills. The skill should guide the user rather than silently elevating privileges.
+```bash
+python3 118-skill-linker/scripts/skill_manager.py update --repo ~/GitHub/my-skills --execute
+```
 
-Windows link options:
+## Windows 说明
 
-- `mklink /D link target`: directory symlink, closest to macOS/Linux symlinks.
-- `mklink /J link target`: directory junction, often easier for directory-based skills.
-- `.lnk` shortcuts: not recommended, because agents and scripts may not treat them as real directories.
+这套管理方式在概念上是跨平台的，但 Windows 创建软链接时可能需要开启 Developer Mode，或者使用管理员权限终端。
 
-The script defaults to `--link-type auto`. On Windows, auto mode tries a symlink first and falls back to a junction for directories. You can also request junctions explicitly:
+Windows 上常见的链接方式：
+
+- `mklink /D link target`：目录 symlink，最接近 macOS/Linux 的软链接。
+- `mklink /J link target`：目录 junction，常用于目录，很多时候权限要求更友好。
+- `.lnk` 快捷方式：不推荐用于 skills，因为 Agent 和脚本通常不会把它当真实目录读取。
+
+脚本默认使用 `--link-type auto`。在 Windows 上，auto 模式会先尝试 symlink；如果失败，会尝试 junction。你也可以明确指定 junction：
 
 ```powershell
 python 118-skill-linker\scripts\skill_manager.py link --project . --source C:\Users\you\GitHub\my-skills\skills\write-blog --link-type junction
 python 118-skill-linker\scripts\skill_manager.py init --project . --agents claude,codex --link-type junction
 ```
 
-An AI agent may detect and explain missing permissions, but it should not silently elevate privileges, bypass UAC, or enter administrator credentials.
+AI Agent 可以帮你检测和解释权限问题，但不应该静默提权、绕过 UAC，或者输入管理员密码。
 
-## Installation
+## 安装方式
 
-For project-level use, link or copy this folder into a project's skill directory:
+项目级使用时，可以把这个目录复制或链接到项目的 skills 目录：
 
 ```bash
 .agents/skills/118-skill-linker -> /path/to/118-skill-linker
 ```
 
-If Codex or Claude Code expects a different entry point, link that entry point to `.agents/skills` after confirming the plan:
+如果 Codex 或 Claude Code 需要不同入口，可以在确认计划后，把对应入口链接到 `.agents/skills`：
 
 ```bash
 .codex/skills  -> .agents/skills
 .claude/skills -> .agents/skills
 ```
+

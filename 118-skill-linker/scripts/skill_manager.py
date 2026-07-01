@@ -22,6 +22,10 @@ def expand(path: str | Path) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
+def expand_preserve_link(path: str | Path) -> Path:
+    return Path(path).expanduser()
+
+
 def classify(path: Path, include_entries: bool = False) -> dict:
     item = {
         "path": str(path),
@@ -276,6 +280,38 @@ def check(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+def remove_link_path(target: Path) -> None:
+    if target.is_symlink():
+        target.unlink()
+        return
+    if target.is_dir():
+        target.rmdir()
+        return
+    target.unlink()
+
+
+def unlink(args: argparse.Namespace) -> int:
+    target = expand_preserve_link(args.target)
+    item = classify(target)
+    plan = {
+        "target": item,
+        "will_remove_link": item["is_symlink"] or item["is_junction"],
+        "will_delete_real_directory": False,
+        "note": "默认只删除软链接或 junction 本身，不删除中央 skill 原件。",
+    }
+    print(json.dumps({"planned_unlink": plan}, ensure_ascii=False, indent=2))
+    if not target.exists() and not target.is_symlink():
+        raise SystemExit(f"目标不存在: {target}")
+    if not item["is_symlink"] and not item["is_junction"]:
+        raise SystemExit("目标不是软链接或 junction。为了避免删除真实 skill 目录，已停止。")
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 删除链接本身")
+        return 0
+    remove_link_path(target)
+    print(json.dumps({"unlinked": str(target), "deleted_original": False}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def migrate(args: argparse.Namespace) -> int:
     source = expand(args.source)
     central = expand(args.central)
@@ -521,6 +557,11 @@ def main() -> int:
     check_parser = sub.add_parser("check")
     check_parser.add_argument("--project", default=".")
     check_parser.set_defaults(func=check)
+
+    unlink_parser = sub.add_parser("unlink")
+    unlink_parser.add_argument("--target", required=True)
+    unlink_parser.add_argument("--execute", action="store_true")
+    unlink_parser.set_defaults(func=unlink)
 
     git_status_parser = sub.add_parser("git-status")
     git_status_parser.add_argument("--repo", required=True)

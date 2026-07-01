@@ -10,6 +10,7 @@
 - 识别真实目录、软链接、失效软链接、重复 skill 名称，以及可能的中央 skills 仓库。
 - 初始化项目级入口，例如 `.agents/skills`、`.codex/skills`、`.claude/skills`。
 - 把中央目录里的一个或多个 skills 链接到当前项目。
+- 从当前项目停用某个 skill，只删除入口链接，不删除中央原件。
 - 在用户确认后，把可能的 skills 仓库克隆到中央目录父级。
 - 把已经复制到全局或项目里的 skill 迁移到中央目录，并在原位置创建软链接。
 - 检查 git 状态、发现可更新的下载仓库、更新 skill 仓库、切换到指定版本。
@@ -23,7 +24,7 @@
 - 在把某个路径当作中央 skills 目录前，会先让用户确认。
 - 写入类操作默认 dry-run。
 - 不会用软链接覆盖已有真实目录。
-- 不会删除真实 skill 目录，除非用户明确要求删除那个具体目录。
+- 用户说“删除 skill”时，默认只从当前项目停用，不删除真实 skill 目录，除非用户明确要求删除那个具体目录。
 - 同步、迁移、克隆、git 更新和版本切换前，会先说明计划。
 
 ## 输出要求
@@ -71,6 +72,12 @@ python3 118-skill-linker/scripts/skill_manager.py link --project . --source ~/Gi
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills
+```
+
+以 dry-run 方式从当前项目停用某个 skill：
+
+```bash
+python3 118-skill-linker/scripts/skill_manager.py unlink --target .agents/skills/write-blog
 ```
 
 用户确认后更新某个仓库：

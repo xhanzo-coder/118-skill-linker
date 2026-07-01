@@ -1,4 +1,4 @@
 interface:
   display_name: "118 Skill Linker"
-  short_description: "克隆、链接、迁移并更新 skills"
-  default_prompt: "使用 $118-skill-linker 安全检查、链接、迁移并更新当前项目的 Agent skills。"
+  short_description: "配置中央目录，链接、迁移并更新 skills"
+  default_prompt: "使用 $118-skill-linker 读取中央目录配置，并安全检查、链接、迁移或更新当前项目的 Agent skills。"

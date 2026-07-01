@@ -15,6 +15,8 @@ from typing import Iterable
 
 PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
 USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
+CONFIG_FILENAME = ".skill-linker.json"
+VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
 
 
@@ -77,8 +79,88 @@ def scan_skill_entries(directory: Path) -> list[dict]:
     return entries
 
 
-def candidate_central_dirs(home: Path) -> list[str]:
+def config_paths(project: Path, home: Path) -> dict[str, str]:
+    return {
+        "project": str(project / CONFIG_FILENAME),
+        "user": str(home / CONFIG_FILENAME),
+    }
+
+
+def read_config_file(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"配置文件不是合法 JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("配置文件顶层必须是 JSON object")
+    return data
+
+
+def normalize_config(path: Path, scope: str, data: dict) -> dict:
+    mode = data.get("default_mode", "ask")
+    if mode not in VALID_DEFAULT_MODES:
+        raise ValueError(f"default_mode 必须是 {sorted(VALID_DEFAULT_MODES)} 之一")
+    central_raw = data.get("central_skills_dir")
+    central_path = None
+    central_exists = False
+    if central_raw:
+        central = Path(str(central_raw)).expanduser()
+        if not central.is_absolute():
+            central = path.parent / central
+        central_path = str(central.resolve(strict=False))
+        central_exists = central.exists() and central.is_dir()
+    return {
+        "source": scope,
+        "path": str(path),
+        "central_skills_dir": central_path,
+        "central_exists": central_exists,
+        "default_mode": mode,
+    }
+
+
+def load_effective_config(project: Path, home: Path) -> dict:
+    paths = config_paths(project, home)
+    for scope, raw_path in (("project", paths["project"]), ("user", paths["user"])):
+        path = Path(raw_path)
+        try:
+            data = read_config_file(path)
+        except ValueError as exc:
+            return {
+                "source": "error",
+                "path": str(path),
+                "error": str(exc),
+                "search_paths": paths,
+            }
+        if data is not None:
+            try:
+                config = normalize_config(path, scope, data)
+            except ValueError as exc:
+                return {
+                    "source": "error",
+                    "path": str(path),
+                    "error": str(exc),
+                    "search_paths": paths,
+                }
+            config["search_paths"] = paths
+            return config
+    return {
+        "source": None,
+        "path": None,
+        "central_skills_dir": None,
+        "central_exists": False,
+        "default_mode": "ask",
+        "search_paths": paths,
+    }
+
+
+def candidate_central_dirs(home: Path, configured: str | None = None) -> list[str]:
     candidates: list[Path] = []
+    if configured:
+        configured_path = Path(configured)
+        if configured_path.exists():
+            candidates.append(configured_path)
     github = home / "GitHub"
     if github.exists():
         for repo in sorted(github.iterdir(), key=lambda p: p.name):
@@ -86,8 +168,7 @@ def candidate_central_dirs(home: Path) -> list[str]:
                 candidate = repo / suffix
                 if candidate.exists():
                     candidates.append(candidate)
-    for raw in ("~/Skills", "~/.agents/skills"):
-        candidate = expand(raw)
+    for candidate in (home / "Skills", home / ".agents" / "skills"):
         if candidate.exists():
             candidates.append(candidate)
     seen: set[str] = set()
@@ -113,16 +194,47 @@ def collect_duplicate_names(groups: Iterable[dict]) -> dict[str, list[str]]:
 def inspect(args: argparse.Namespace) -> int:
     project = expand(args.project)
     home = expand(args.home)
+    config = load_effective_config(project, home)
     project_dirs = [classify(project / rel, include_entries=True) for rel in PROJECT_SKILL_DIRS]
     user_dirs = [classify(expand(rel.replace("~", str(home), 1)), include_entries=True) for rel in USER_SKILL_DIRS]
     report = {
         "project": str(project),
+        "config": config,
         "project_skill_dirs": project_dirs,
         "user_skill_dirs": user_dirs,
-        "central_candidates": candidate_central_dirs(home),
+        "central_candidates": candidate_central_dirs(home, config.get("central_skills_dir")),
         "duplicates": collect_duplicate_names(project_dirs + user_dirs),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def config(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    home = expand(args.home)
+    if not args.central:
+        print(json.dumps(load_effective_config(project, home), ensure_ascii=False, indent=2))
+        return 0
+
+    central = expand(args.central)
+    target = project / CONFIG_FILENAME if args.scope == "project" else home / CONFIG_FILENAME
+    data = {
+        "central_skills_dir": str(central),
+        "default_mode": args.mode,
+    }
+    plan = {
+        "write_config": str(target),
+        "scope": args.scope,
+        "config": data,
+        "will_create_parent": not target.parent.exists(),
+    }
+    print(json.dumps({"planned_config": plan}, ensure_ascii=False, indent=2))
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 写入配置文件")
+        return 0
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"written_config": str(target)}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -531,6 +643,15 @@ def main() -> int:
     inspect_parser.add_argument("--project", default=".")
     inspect_parser.add_argument("--home", default="~")
     inspect_parser.set_defaults(func=inspect)
+
+    config_parser = sub.add_parser("config")
+    config_parser.add_argument("--project", default=".")
+    config_parser.add_argument("--home", default="~")
+    config_parser.add_argument("--scope", choices=["project", "user"], default="user")
+    config_parser.add_argument("--central")
+    config_parser.add_argument("--mode", choices=sorted(VALID_DEFAULT_MODES), default="centralize")
+    config_parser.add_argument("--execute", action="store_true")
+    config_parser.set_defaults(func=config)
 
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project", default=".")

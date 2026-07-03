@@ -367,6 +367,64 @@ def skill_dirs_in_repo(repo: Path) -> list[str]:
     return [str(path.resolve(strict=False)) for path in candidates]
 
 
+def user_global_skill_dir(home: Path, agent: str) -> Path:
+    if agent == "agents":
+        return home / ".agents" / "skills"
+    if agent == "codex":
+        return home / ".codex" / "skills"
+    if agent == "claude":
+        return home / ".claude" / "skills"
+    raise SystemExit(f"未知 Agent: {agent}")
+
+
+def install_self(args: argparse.Namespace) -> int:
+    home = expand(args.home)
+    source = expand(args.source) if args.source else Path(__file__).resolve(strict=False).parents[1]
+    if not source.exists() or not source.is_dir() or not (source / "SKILL.md").exists():
+        raise SystemExit(f"source 必须是包含 SKILL.md 的 118-skill-linker 目录: {source}")
+    agents = parse_agents(args.agents)
+    primary = user_global_skill_dir(home, "agents") / "118-skill-linker"
+    plan = {
+        "source": str(source),
+        "install_primary": str(primary),
+        "mode": args.mode,
+        "agent_entries": [],
+        "will_overwrite": False,
+        "note": "118-skill-linker 是管理型 skill，可作为例外安装到用户级全局目录；业务型 skills 不应因此默认全局安装。",
+    }
+    if primary.exists() or primary.is_symlink():
+        plan["existing_primary"] = classify(primary)
+        if not args.replace:
+            print(json.dumps({"planned_install_self": plan}, ensure_ascii=False, indent=2))
+            raise SystemExit("全局 118-skill-linker 已存在；默认不覆盖。确认替换时传入 --replace")
+        plan["will_overwrite"] = True
+    for agent in agents:
+        entry = user_global_skill_dir(home, agent) / "118-skill-linker"
+        target = primary if agent != "agents" else source
+        plan["agent_entries"].append({"agent": agent, "path": str(entry), "target": str(target)})
+    print(json.dumps({"planned_install_self": plan}, ensure_ascii=False, indent=2))
+    if not args.execute:
+        print("当前只是 dry-run；用户确认后再传入 --execute 安装 118-skill-linker")
+        return 0
+    if primary.exists() or primary.is_symlink():
+        if primary.is_symlink() or primary.is_file():
+            primary.unlink()
+        elif primary.is_dir():
+            shutil.rmtree(primary)
+    primary.parent.mkdir(parents=True, exist_ok=True)
+    if args.mode == "copy":
+        shutil.copytree(source, primary, symlinks=True)
+    else:
+        create_symlink(primary, source, True, args.link_type)
+    for agent in agents:
+        if agent == "agents":
+            continue
+        entry = user_global_skill_dir(home, agent) / "118-skill-linker"
+        create_symlink(entry, primary, True, args.link_type)
+    print(json.dumps({"installed_self": plan}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def init(args: argparse.Namespace) -> int:
     project = expand(args.project)
     execute = args.execute
@@ -699,6 +757,16 @@ def main() -> int:
     config_parser.add_argument("--mode", choices=sorted(VALID_DEFAULT_MODES), default="centralize")
     config_parser.add_argument("--execute", action="store_true")
     config_parser.set_defaults(func=config)
+
+    install_self_parser = sub.add_parser("install-self")
+    install_self_parser.add_argument("--source")
+    install_self_parser.add_argument("--home", default="~")
+    install_self_parser.add_argument("--agents", default="agents")
+    install_self_parser.add_argument("--mode", choices=["copy", "symlink"], default="copy")
+    install_self_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
+    install_self_parser.add_argument("--replace", action="store_true")
+    install_self_parser.add_argument("--execute", action="store_true")
+    install_self_parser.set_defaults(func=install_self)
 
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--project", default=".")

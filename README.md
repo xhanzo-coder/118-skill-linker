@@ -8,6 +8,8 @@
 
 普通个人使用时，推荐只维护一个非全局中央 skills 库，并把配置写在 `~/.skill-linker.json`。默认中央目录是 `~/.118-skill-linker/AgentSkills`，Windows 是 `%USERPROFILE%\.118-skill-linker\AgentSkills`。项目级 `.skill-linker.json` 只是覆盖例外，用于某个项目需要独立中央库、团队共享库、客户隔离库或测试库的场景。
 
+`118-skill-linker` 自己是管理型 skill，建议安装到用户级全局 skills 目录，这样新项目和新对话才能自动召回它。这是管理器自身的例外；业务型 skills 仍然推荐放在非全局中央库中，再按项目软链接启用。
+
 ## 它能做什么
 
 - 检查用户级和项目级 skills 目录。
@@ -31,6 +33,41 @@
 - 不会用软链接覆盖已有真实目录。
 - 用户说“删除 skill”时，默认只从当前项目停用，不删除真实 skill 目录，除非用户明确要求删除那个具体目录。
 - 同步、迁移、克隆、git 更新和版本切换前，会先说明计划。
+
+## 自举安装
+
+如果 `118-skill-linker` 当前只是项目级副本，Agent 在新项目里可能无法自动发现它。首次触发时应该提醒用户：
+
+```text
+118-skill-linker 是管理型 skill。建议把它安装到用户级全局 skills 目录，以便新项目和新对话能自动召回它。
+业务型 skills 不默认全局安装，仍然放在非全局中央库中，按项目启用。
+```
+
+只有用户确认后才安装，确认口令建议为：
+
+```text
+确认全局安装 118-skill-linker
+```
+
+推荐目标：
+
+```text
+~/.agents/skills/118-skill-linker
+```
+
+如果 Codex 或 Claude 需要自己的全局入口，再创建对应入口链接。
+
+dry-run：
+
+```bash
+python3 118-skill-linker/scripts/skill_manager.py install-self --source ./118-skill-linker --agents agents,codex,claude
+```
+
+用户确认后执行：
+
+```bash
+python3 118-skill-linker/scripts/skill_manager.py install-self --source ./118-skill-linker --agents agents,codex,claude --execute
+```
 
 ## 输出要求
 

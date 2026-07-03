@@ -97,7 +97,7 @@ macOS/Linux: ~/.118-skill-linker/AgentSkills
 Windows: %USERPROFILE%\.118-skill-linker\AgentSkills
 ```
 
-这个目录用于存放 skill 原件；它不是 Agent 全局 skills 目录，不会默认让所有项目启用里面的 skill。用户也可以自定义非全局路径，例如 `~/Skills`、`~/GitHub/<repo>/skills`、`/Volumes/WorkDisk/AgentSkills` 或 `D:\AI\AgentSkills`。
+这个目录用于存放 skill 原件；它不是 Agent 全局 skills 目录，不会默认让所有项目启用里面的 skill。用户也可以自定义一个父目录，例如 `~/Skills`、`~/GitHub/<repo>`、`/Volumes/WorkDisk` 或 `D:\AI`。当用户提供的是父目录时，实际中央库必须派生为 `<父目录>/.118-skill-linker/AgentSkills`，不要把 skill 原件直接散放在用户选择的父目录下。
 
 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 是 Agent 全局发现目录；把中央库放在那里会让很多 skill 变成全局可见，只有用户明确选择这种模式时才使用。
 
@@ -141,7 +141,7 @@ Windows 配置示例：
 
 项目级配置优先级高于用户级配置，但不要把“优先级更高”理解为“默认应该写项目配置”。项目级配置用于覆盖全局默认；如果用户只是第一次确认中央目录，优先建议写入用户级配置。
 
-没有配置时，先向用户推荐默认中央目录 `~/.118-skill-linker/AgentSkills`（Windows 为 `%USERPROFILE%\.118-skill-linker\AgentSkills`），并允许用户自定义路径。不要默认建议“只整理当前项目级入口”或“保留项目内真实 skill 原件”。除非用户明确要求项目本地模式，否则推荐方案必须是：确认非全局中央目录、写入用户级配置、把项目内真实 skill 迁移或同步到中央目录，再把项目入口改成软链接。
+没有配置时，先向用户推荐默认中央目录 `~/.118-skill-linker/AgentSkills`（Windows 为 `%USERPROFILE%\.118-skill-linker\AgentSkills`），并允许用户自定义父目录。自定义父目录必须追加 `.118-skill-linker/AgentSkills` 作为实际中央库，例如用户选择 `/Users/name/Desktop/WorkSpace` 时，实际中央库应是 `/Users/name/Desktop/WorkSpace/.118-skill-linker/AgentSkills`。不要默认建议“只整理当前项目级入口”或“保留项目内真实 skill 原件”。除非用户明确要求项目本地模式，否则推荐方案必须是：确认非全局中央目录、写入用户级配置、创建中央命名空间目录、把项目内真实 skill 迁移或同步到中央目录，再把项目入口改成软链接。
 
 如果用户选择 `~/.agents/skills` 这类 Agent 全局目录作为中央库，必须提醒：这会让其中的 skills 可能对所有项目全局可见，不符合“每个项目只启用需要的 skills”的推荐模式。要求用户明确回复 `确认使用全局 skills 目录作为中央库` 后，才围绕它生成迁移方案。
 
@@ -169,14 +169,16 @@ Windows 配置示例：
    - 哪些路径可能是中央 skills 目录
 5. 如果已有有效配置，围绕配置的中央目录生成方案。
 6. 如果没有配置，推荐默认中央目录：macOS/Linux 使用 `~/.118-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.118-skill-linker\AgentSkills`；同时说明用户可以自定义非全局路径。
-7. 如果用户选择自定义路径，判断它是否为 Agent 全局目录。普通自定义路径默认写用户级 `~/.skill-linker.json`；只有用户明确说“这个项目专用”，才写当前项目 `.skill-linker.json`。
+7. 如果用户选择自定义路径，先判断它是“父目录”还是“最终中央目录”。默认把用户给的自定义路径当父目录处理，并派生实际中央库 `<自定义路径>/.118-skill-linker/AgentSkills`；只有用户明确说“这就是最终中央目录”且路径已经包含 `.118-skill-linker/AgentSkills` 时，才直接使用该路径。
 8. 如果用户选择 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills` 这类 Agent 全局目录，先给出全局可见风险提醒，并要求明确确认口令 `确认使用全局 skills 目录作为中央库`。
-9. 用户确认中央目录后，给出“写入配置 + 创建中央目录 + 迁移或同步项目真实 skill + 创建项目入口软链接”的计划。不要把“只整理当前项目级入口、不迁移到中央库”作为推荐方案。
+9. 用户确认中央目录后，给出“写入配置 + 创建 `<父目录>/.118-skill-linker/AgentSkills` 中央命名空间目录 + 迁移或同步项目真实 skill + 创建项目入口软链接”的计划。不要把“只整理当前项目级入口、不迁移到中央库”作为推荐方案。
 10. 在没有配置且用户未确认中央目录前，不要执行迁移、同步、替换或 git 更新。
 
-如果没有发现明显的中央目录，推荐 `~/.118-skill-linker/AgentSkills` 或 Windows 的 `%USERPROFILE%\.118-skill-linker\AgentSkills`，并询问用户是否接受或自定义；不要自行创建中央目录，除非用户明确同意。
+如果没有发现明显的中央目录，推荐 `~/.118-skill-linker/AgentSkills` 或 Windows 的 `%USERPROFILE%\.118-skill-linker\AgentSkills`，并询问用户是否接受或自定义父目录；不要自行创建中央目录，除非用户明确同意。
 
-反例：如果项目里有 `.agents/skills/foo` 真实目录，同时只发现 `~/.agents/skills`，不要回复“我建议先只整理当前项目级入口，不迁移到用户级中央库”，也不要把 `~/.agents/skills` 标成默认推荐中央库。正确做法是说明 `~/.agents/skills` 是 Agent 全局目录，并推荐 `~/.118-skill-linker/AgentSkills`；用户确认后，再给出“写入用户级配置 + 创建中央目录 + 迁移或同步项目真实 skill + 创建项目入口软链接”的计划。
+反例：如果用户选择 `/Users/name/Desktop/WorkSpace` 作为中央库位置，不要把配置写成 `/Users/name/Desktop/WorkSpace/AgentSkills` 或 `/Users/name/Desktop/WorkSpace`。正确做法是把它当父目录，配置为 `/Users/name/Desktop/WorkSpace/.118-skill-linker/AgentSkills`，并在计划中明确会创建 `.118-skill-linker/AgentSkills`。
+
+反例：如果项目里有 `.agents/skills/foo` 真实目录，同时只发现 `~/.agents/skills`，不要回复“我建议先只整理当前项目级入口，不迁移到用户级中央库”，也不要把 `~/.agents/skills` 标成默认推荐中央库。正确做法是说明 `~/.agents/skills` 是 Agent 全局目录，并推荐 `~/.118-skill-linker/AgentSkills`；用户确认后，再给出“写入用户级配置 + 创建中央命名空间目录 + 迁移或同步项目真实 skill + 创建项目入口软链接”的计划。
 
 ## 同步前确认
 
@@ -184,6 +186,7 @@ Windows 配置示例：
 
 - 是否会写入配置文件；如果会，写明是用户级 `~/.skill-linker.json` 还是项目级 `.skill-linker.json`
 - 如果写入用户级配置，说明这会影响这台电脑上以后所有未设置项目级覆盖的项目
+- 如果用户提供的是自定义父目录，说明实际中央库会创建在 `<父目录>/.118-skill-linker/AgentSkills`
 - 将创建哪些目录
 - 将创建哪些软链接，以及每个软链接指向哪里
 - 将跳过哪些已有目录或冲突项
@@ -251,6 +254,7 @@ Windows 配置示例：
 | 动作 | 来源 | 目标 | 影响 | 是否删除真实目录 |
 | --- | --- | --- | --- | --- |
 | 写入用户级配置 | 无 | [用户级配置] /Users/name/.skill-linker.json | 后续未设置项目级覆盖的项目默认使用该中央目录 | 否 |
+| 创建中央命名空间目录 | [自定义父目录] /Users/name/Desktop/WorkSpace | [中央目录] /Users/name/Desktop/WorkSpace/.118-skill-linker/AgentSkills | skill 原件集中放在带 118-skill-linker 标识的目录下 | 否 |
 | 迁移 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | [中央目录] /Users/name/.118-skill-linker/AgentSkills/foo | foo 原件进入中央目录 | 否 |
 | 备份 | [项目级][Claude] /abs/project/.claude/skills | /abs/project/.skill-linker-backup/.../.claude/skills | 保留原目录副本 | 否 |
 | 建立软链接 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | /Users/name/.118-skill-linker/AgentSkills/foo | 当前项目入口指向中央原件 | 否 |
@@ -297,6 +301,12 @@ python3 scripts/skill_manager.py install-self --source /path/to/118-skill-linker
 
 ```bash
 python3 scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize
+```
+
+如果用户提供的是自定义父目录，使用 `--central-base`，脚本会自动派生 `<父目录>/.118-skill-linker/AgentSkills`：
+
+```bash
+python3 scripts/skill_manager.py config --scope user --central-base "/Users/name/Desktop/WorkSpace" --mode centralize
 ```
 
 用户确认后写入：

@@ -118,7 +118,14 @@ Windows 示例：
 3. 把当前项目里的真实 skill 迁移或同步到中央目录。
 4. 把当前项目入口改成指向中央原件的软链接。
 
-用户可以自定义中央目录，例如 `/Volumes/WorkDisk/AgentSkills` 或 `D:\AI\AgentSkills`。普通自定义路径默认写入用户级配置；只有用户明确说“这个项目专用”，才写当前项目 `.skill-linker.json`。
+用户可以自定义一个父目录，例如 `/Volumes/WorkDisk`、`/Users/name/Desktop/WorkSpace` 或 `D:\AI`。默认会在这个父目录下面创建 `.118-skill-linker/AgentSkills` 作为实际中央库，例如：
+
+```text
+/Users/name/Desktop/WorkSpace/.118-skill-linker/AgentSkills
+D:\AI\.118-skill-linker\AgentSkills
+```
+
+不要把 skill 原件直接散放在用户选择的父目录下，也不要只创建裸露的 `AgentSkills` 子目录。普通自定义路径默认写入用户级配置；只有用户明确说“这个项目专用”，才写当前项目 `.skill-linker.json`。
 
 不要默认建议“只整理当前项目级入口、不迁移到中央库”。只有用户明确要求项目本地模式时，才使用 `project-local`。
 
@@ -157,6 +164,12 @@ python3 118-skill-linker/scripts/skill_manager.py config --project .
 
 ```bash
 python3 118-skill-linker/scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize
+```
+
+如果用户提供的是自定义父目录，使用 `--central-base` 自动派生实际中央库：
+
+```bash
+python3 118-skill-linker/scripts/skill_manager.py config --scope user --central-base "/Users/name/Desktop/WorkSpace" --mode centralize
 ```
 
 用户确认后实际写入：

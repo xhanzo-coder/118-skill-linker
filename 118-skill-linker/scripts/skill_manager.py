@@ -17,6 +17,7 @@ PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
 USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
 DEFAULT_CENTRAL_DIR = "~/.118-skill-linker/AgentSkills"
 EXTRA_NON_GLOBAL_CENTRAL_DIRS = ["~/Skills"]
+CENTRAL_NAMESPACE = Path(".118-skill-linker") / "AgentSkills"
 CONFIG_FILENAME = ".skill-linker.json"
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
@@ -111,6 +112,15 @@ def default_central_dir(home: Path) -> Path:
     return Path(DEFAULT_CENTRAL_DIR.replace("~", str(home), 1)).expanduser()
 
 
+def central_from_base(base: Path) -> Path:
+    return base / CENTRAL_NAMESPACE
+
+
+def has_central_namespace(path: Path) -> bool:
+    parts = path.parts
+    return len(parts) >= 2 and parts[-2:] == CENTRAL_NAMESPACE.parts
+
+
 def user_skill_paths(home: Path) -> list[Path]:
     return [Path(raw.replace("~", str(home), 1)).expanduser().resolve(strict=False) for raw in USER_SKILL_DIRS]
 
@@ -126,6 +136,15 @@ def global_dir_warning(path: Path, home: Path) -> str | None:
     return (
         "该路径是 Agent 全局 skills 目录。把中央库放在这里可能让其中的 skills 对所有项目全局可见；"
         "如果只是集中存放 skill 原件，推荐使用 ~/.118-skill-linker/AgentSkills。"
+    )
+
+
+def namespace_warning(path: Path) -> str | None:
+    if has_central_namespace(path):
+        return None
+    return (
+        "该 central 路径没有包含 .118-skill-linker/AgentSkills 命名空间。"
+        "如果用户给的是想放置中央库的父目录，请使用 --central-base，让脚本自动派生 <父目录>/.118-skill-linker/AgentSkills。"
     )
 
 
@@ -255,24 +274,31 @@ def inspect(args: argparse.Namespace) -> int:
 def config(args: argparse.Namespace) -> int:
     project = expand(args.project)
     home = expand(args.home)
-    if not args.central:
+    if args.central and args.central_base:
+        raise SystemExit("不能同时提供 --central 和 --central-base")
+    if not args.central and not args.central_base:
         print(json.dumps(load_effective_config(project, home), ensure_ascii=False, indent=2))
         return 0
 
-    central = expand_with_home(args.central, home)
+    central_base = expand_with_home(args.central_base, home) if args.central_base else None
+    central = central_from_base(central_base) if central_base else expand_with_home(args.central, home)
     target = project / CONFIG_FILENAME if args.scope == "project" else home / CONFIG_FILENAME
     data = {
         "central_skills_dir": str(central),
         "default_mode": args.mode,
     }
     warning = global_dir_warning(central, home)
+    warnings = [item for item in (warning, None if args.central_base else namespace_warning(central)) if item]
     plan = {
         "write_config": str(target),
         "scope": args.scope,
+        "central_base_dir": str(central_base) if central_base else None,
+        "central_namespace": str(CENTRAL_NAMESPACE),
         "config": data,
-        "will_create_parent": not target.parent.exists(),
+        "will_create_config_parent": not target.parent.exists(),
+        "will_create_central_dir": not central.exists(),
         "central_is_global_agent_dir": bool(warning),
-        "warning": warning,
+        "warnings": warnings,
         "recommended_default_central_dir": str(default_central_dir(home).resolve(strict=False)),
     }
     print(json.dumps({"planned_config": plan}, ensure_ascii=False, indent=2))
@@ -280,6 +306,7 @@ def config(args: argparse.Namespace) -> int:
         print("当前只是 dry-run；用户确认后再传入 --execute 写入配置文件")
         return 0
     target.parent.mkdir(parents=True, exist_ok=True)
+    central.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"written_config": str(target)}, ensure_ascii=False, indent=2))
     return 0
@@ -754,6 +781,7 @@ def main() -> int:
     config_parser.add_argument("--home", default="~")
     config_parser.add_argument("--scope", choices=["project", "user"], default="user")
     config_parser.add_argument("--central")
+    config_parser.add_argument("--central-base")
     config_parser.add_argument("--mode", choices=sorted(VALID_DEFAULT_MODES), default="centralize")
     config_parser.add_argument("--execute", action="store_true")
     config_parser.set_defaults(func=config)

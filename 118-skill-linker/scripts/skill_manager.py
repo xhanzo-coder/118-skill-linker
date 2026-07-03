@@ -15,6 +15,8 @@ from typing import Iterable
 
 PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
 USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
+DEFAULT_CENTRAL_DIR = "~/.118-skill-linker/AgentSkills"
+EXTRA_NON_GLOBAL_CENTRAL_DIRS = ["~/Skills"]
 CONFIG_FILENAME = ".skill-linker.json"
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
@@ -22,6 +24,13 @@ IS_WINDOWS = platform.system() == "Windows"
 
 def expand(path: str | Path) -> Path:
     return Path(path).expanduser().resolve(strict=False)
+
+
+def expand_with_home(path: str | Path, home: Path) -> Path:
+    raw = str(path)
+    if raw == "~" or raw.startswith("~/"):
+        raw = raw.replace("~", str(home), 1)
+    return Path(raw).expanduser().resolve(strict=False)
 
 
 def expand_preserve_link(path: str | Path) -> Path:
@@ -98,7 +107,29 @@ def read_config_file(path: Path) -> dict | None:
     return data
 
 
-def normalize_config(path: Path, scope: str, data: dict) -> dict:
+def default_central_dir(home: Path) -> Path:
+    return Path(DEFAULT_CENTRAL_DIR.replace("~", str(home), 1)).expanduser()
+
+
+def user_skill_paths(home: Path) -> list[Path]:
+    return [Path(raw.replace("~", str(home), 1)).expanduser().resolve(strict=False) for raw in USER_SKILL_DIRS]
+
+
+def is_global_agent_dir(path: Path, home: Path) -> bool:
+    probe = path.expanduser().resolve(strict=False)
+    return any(probe == candidate for candidate in user_skill_paths(home))
+
+
+def global_dir_warning(path: Path, home: Path) -> str | None:
+    if not is_global_agent_dir(path, home):
+        return None
+    return (
+        "该路径是 Agent 全局 skills 目录。把中央库放在这里可能让其中的 skills 对所有项目全局可见；"
+        "如果只是集中存放 skill 原件，推荐使用 ~/.118-skill-linker/AgentSkills。"
+    )
+
+
+def normalize_config(path: Path, scope: str, data: dict, home: Path) -> dict:
     mode = data.get("default_mode", "ask")
     if mode not in VALID_DEFAULT_MODES:
         raise ValueError(f"default_mode 必须是 {sorted(VALID_DEFAULT_MODES)} 之一")
@@ -106,16 +137,21 @@ def normalize_config(path: Path, scope: str, data: dict) -> dict:
     central_path = None
     central_exists = False
     if central_raw:
-        central = Path(str(central_raw)).expanduser()
+        central = expand_with_home(str(central_raw), home)
         if not central.is_absolute():
             central = path.parent / central
         central_path = str(central.resolve(strict=False))
         central_exists = central.exists() and central.is_dir()
+        warning = global_dir_warning(central, home)
+    else:
+        warning = None
     return {
         "source": scope,
         "path": str(path),
         "central_skills_dir": central_path,
         "central_exists": central_exists,
+        "central_is_global_agent_dir": bool(warning),
+        "warning": warning,
         "default_mode": mode,
     }
 
@@ -135,7 +171,7 @@ def load_effective_config(project: Path, home: Path) -> dict:
             }
         if data is not None:
             try:
-                config = normalize_config(path, scope, data)
+                config = normalize_config(path, scope, data, home)
             except ValueError as exc:
                 return {
                     "source": "error",
@@ -155,6 +191,10 @@ def load_effective_config(project: Path, home: Path) -> dict:
     }
 
 
+def global_agent_dirs(home: Path) -> list[str]:
+    return [str(candidate) for candidate in user_skill_paths(home) if candidate.exists()]
+
+
 def candidate_central_dirs(home: Path, configured: str | None = None) -> list[str]:
     candidates: list[Path] = []
     if configured:
@@ -168,7 +208,8 @@ def candidate_central_dirs(home: Path, configured: str | None = None) -> list[st
                 candidate = repo / suffix
                 if candidate.exists():
                     candidates.append(candidate)
-    for candidate in (home / "Skills", home / ".agents" / "skills"):
+    for raw in [DEFAULT_CENTRAL_DIR, *EXTRA_NON_GLOBAL_CENTRAL_DIRS]:
+        candidate = Path(raw.replace("~", str(home), 1)).expanduser()
         if candidate.exists():
             candidates.append(candidate)
     seen: set[str] = set()
@@ -202,6 +243,8 @@ def inspect(args: argparse.Namespace) -> int:
         "config": config,
         "project_skill_dirs": project_dirs,
         "user_skill_dirs": user_dirs,
+        "global_agent_dirs": global_agent_dirs(home),
+        "recommended_default_central_dir": str(default_central_dir(home).resolve(strict=False)),
         "central_candidates": candidate_central_dirs(home, config.get("central_skills_dir")),
         "duplicates": collect_duplicate_names(project_dirs + user_dirs),
     }
@@ -216,17 +259,21 @@ def config(args: argparse.Namespace) -> int:
         print(json.dumps(load_effective_config(project, home), ensure_ascii=False, indent=2))
         return 0
 
-    central = expand(args.central)
+    central = expand_with_home(args.central, home)
     target = project / CONFIG_FILENAME if args.scope == "project" else home / CONFIG_FILENAME
     data = {
         "central_skills_dir": str(central),
         "default_mode": args.mode,
     }
+    warning = global_dir_warning(central, home)
     plan = {
         "write_config": str(target),
         "scope": args.scope,
         "config": data,
         "will_create_parent": not target.parent.exists(),
+        "central_is_global_agent_dir": bool(warning),
+        "warning": warning,
+        "recommended_default_central_dir": str(default_central_dir(home).resolve(strict=False)),
     }
     print(json.dumps({"planned_config": plan}, ensure_ascii=False, indent=2))
     if not args.execute:

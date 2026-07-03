@@ -6,7 +6,7 @@
 
 如果你已经确定了中央 skills 目录，可以用 `.skill-linker.json` 记住它。这样在新的对话或新的项目里，Agent 不需要每次重新猜测中央目录。
 
-普通个人使用时，推荐只维护一个用户级中央 skills 库，并把配置写在 `~/.skill-linker.json`。项目级 `.skill-linker.json` 只是覆盖例外，用于某个项目需要独立中央库、团队共享库、客户隔离库或测试库的场景。
+普通个人使用时，推荐只维护一个非全局中央 skills 库，并把配置写在 `~/.skill-linker.json`。默认中央目录是 `~/.118-skill-linker/AgentSkills`，Windows 是 `%USERPROFILE%\.118-skill-linker\AgentSkills`。项目级 `.skill-linker.json` 只是覆盖例外，用于某个项目需要独立中央库、团队共享库、客户隔离库或测试库的场景。
 
 ## 它能做什么
 
@@ -38,13 +38,13 @@
 
 - **用户级**：例如 `~/.codex/skills`、`~/.claude/skills`、`~/.agents/skills`
 - **项目级**：例如当前项目里的 `.codex/skills`、`.claude/skills`、`.agents/skills`
-- **中央目录**：用户确认后的 skills 原件目录
+- **中央目录**：用户确认后的 skills 原件目录，默认推荐非全局目录 `~/.118-skill-linker/AgentSkills`
 - **项目级入口目录**：当前项目用于引用 skills 的入口，通常是 `当前项目/.agents/skills`
 - **Agent 入口目录**：Codex 或 Claude 在当前项目读取的入口，例如 `当前项目/.codex/skills`、`当前项目/.claude/skills`
 
 执行计划中应写清楚每一步的来源路径、目标路径、动作和风险，避免只写 `.codex/skills` 这种容易混淆的相对路径。
 
-尤其要说明：项目级 `.agents/skills` 只是当前项目的 skills 入口目录，不是用户级中央 skills 库。
+尤其要说明：项目级 `.agents/skills` 只是当前项目的 skills 入口目录，不是中央 skills 库；`~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 是 Agent 全局目录，不是默认推荐的中央库。
 
 ## 配置文件
 
@@ -54,25 +54,42 @@
 
 1. 当前项目：`当前项目/.skill-linker.json`
 2. 用户级：`~/.skill-linker.json`
-3. 如果两者都不存在，再扫描候选目录并询问用户
+3. 如果两者都不存在，推荐默认中央目录，同时扫描候选目录并允许用户自定义
 
-虽然项目级配置优先级更高，但它不是默认推荐。首次确认中央目录时，通常应该先写用户级配置：
+虽然项目级配置优先级更高，但它不是默认推荐。首次没有配置时，通常应该先推荐用户级默认中央目录：
 
 ```json
 {
-  "central_skills_dir": "/Users/you/.agents/skills",
+  "central_skills_dir": "/Users/you/.118-skill-linker/AgentSkills",
   "default_mode": "centralize"
 }
 ```
 
-如果还没有配置，但已经发现用户级中央候选，例如 `~/.agents/skills`，默认推荐方案应该是：
+Windows 示例：
 
-1. 请用户确认使用这个用户级中央目录。
+```json
+{
+  "central_skills_dir": "C:\\Users\\you\\.118-skill-linker\\AgentSkills",
+  "default_mode": "centralize"
+}
+```
+
+如果还没有配置，默认推荐方案应该是：
+
+1. 推荐 `~/.118-skill-linker/AgentSkills`，Windows 推荐 `%USERPROFILE%\.118-skill-linker\AgentSkills`。
 2. 写入用户级 `~/.skill-linker.json`。
-3. 把当前项目里的真实 skill 迁移或同步到用户级中央目录。
+3. 把当前项目里的真实 skill 迁移或同步到中央目录。
 4. 把当前项目入口改成指向中央原件的软链接。
 
-不要默认建议“只整理当前项目级入口、不迁移到用户级中央库”。只有用户明确要求项目本地模式时，才使用 `project-local`。
+用户可以自定义中央目录，例如 `/Volumes/WorkDisk/AgentSkills` 或 `D:\AI\AgentSkills`。普通自定义路径默认写入用户级配置；只有用户明确说“这个项目专用”，才写当前项目 `.skill-linker.json`。
+
+不要默认建议“只整理当前项目级入口、不迁移到中央库”。只有用户明确要求项目本地模式时，才使用 `project-local`。
+
+如果用户选择 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 这类 Agent 全局目录作为中央库，必须提醒它可能让其中的 skills 对所有项目全局可见，并要求用户明确确认：
+
+```text
+确认使用全局 skills 目录作为中央库
+```
 
 `default_mode` 可选值：
 
@@ -102,13 +119,13 @@ python3 118-skill-linker/scripts/skill_manager.py config --project .
 以 dry-run 方式写入用户级配置：
 
 ```bash
-python3 118-skill-linker/scripts/skill_manager.py config --scope user --central ~/.agents/skills --mode centralize
+python3 118-skill-linker/scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize
 ```
 
 用户确认后实际写入：
 
 ```bash
-python3 118-skill-linker/scripts/skill_manager.py config --scope user --central ~/.agents/skills --mode centralize --execute
+python3 118-skill-linker/scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize --execute
 ```
 
 ## 目录结构
